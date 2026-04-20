@@ -1,0 +1,47 @@
+name: Job Scraper — Daily Alerts
+
+on:
+  # Run 4 times a day: midnight, 6am, noon, 6pm UTC
+  schedule:
+    - cron: "0 0 * * *"    # 00:00 UTC
+    - cron: "0 6 * * *"    # 06:00 UTC
+    - cron: "0 12 * * *"   # 12:00 UTC
+    - cron: "0 18 * * *"   # 18:00 UTC
+
+  # Allow manual triggering from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write          # needed to commit updated seen_jobs.json
+
+jobs:
+  scrape-and-notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout repo ─────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ─────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── 3. Run the scraper ───────────────────────────────────────
+      - name: Run job scraper
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: python scraper/job_scraper.py
+
+      # ── 4. Commit updated seen-jobs list ─────────────────────────
+      - name: Commit seen_jobs.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scraper/seen_jobs.json
+          git diff --cached --quiet || git commit -m "chore: update seen_jobs.json [skip ci]"
+          git push
