@@ -1,10 +1,12 @@
 """
 Job Scraper — Monitors company career pages for new job postings.
 
-Uses the Greenhouse Job Board API to fetch job listings for configured
-companies.  When a new matching job is detected (by title keyword AND
-San Francisco location), an email alert is sent via Gmail SMTP.
-Seen job IDs are persisted in a JSON file to avoid duplicate notifications.
+Supports two ATS platforms:
+  • Greenhouse (boards-api.greenhouse.io)
+  • Ashby (api.ashbyhq.com)
+
+Filters by title keywords, San Francisco location, and recency.
+Sends email alerts via Gmail SMTP when new matching jobs are found.
 
 Usage:
     python scraper/job_scraper.py
@@ -29,35 +31,110 @@ from urllib.error import URLError, HTTPError
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 COMPANIES = [
-    # ─── Frontier AI Labs ──────────────────────────────────────────
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  HIGH MATCH — Skills directly map to the company's stack
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    {
+        # You literally work with LiveKit right now at Anoten
+        "name": "LiveKit",
+        "platform": "ashby",
+        "slug": "livekit",
+    },
+    {
+        # Voice AI — your current domain
+        "name": "ElevenLabs",
+        "platform": "ashby",
+        "slug": "elevenlabs",
+    },
+    {
+        # Voice AI agents platform
+        "name": "Vapi",
+        "platform": "ashby",
+        "slug": "Vapi",
+    },
+    {
+        # LLM tooling, RAG — you've built RAG apps
+        "name": "LangChain",
+        "platform": "ashby",
+        "slug": "langchain",
+    },
+    {
+        # You have Dagster experience from Spaly Labs
+        "name": "Dagster Labs",
+        "platform": "greenhouse",
+        "slug": "dagsterlabs",
+    },
+    {
+        # ETL pipelines — you built pipelines with dlt/dbt
+        "name": "Fivetran",
+        "platform": "greenhouse",
+        "slug": "fivetran",
+    },
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  STRONG MATCH — AI-native startups, good pay, right level
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    {
+        # Vector DB / RAG infrastructure
+        "name": "Pinecone",
+        "platform": "ashby",
+        "slug": "pinecone",
+    },
+    {
+        # Serverless ML compute — Python-heavy
+        "name": "Modal",
+        "platform": "ashby",
+        "slug": "modal",
+    },
+    {
+        # AI code editor — GenAI product
+        "name": "Cursor",
+        "platform": "ashby",
+        "slug": "cursor",
+    },
+    {
+        # AI coding / GenAI platform
+        "name": "Replit",
+        "platform": "ashby",
+        "slug": "Replit",
+    },
+    {
+        # Data labeling + AI infra — directly relevant
+        "name": "Scale AI",
+        "platform": "greenhouse",
+        "slug": "scaleai",
+    },
+    {
+        # AI training infrastructure
+        "name": "Together AI",
+        "platform": "greenhouse",
+        "slug": "togetherai",
+    },
+    {
+        # Distributed ML, Ray — you have distributed computing exp
+        "name": "Anyscale",
+        "platform": "ashby",
+        "slug": "anyscale",
+    },
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  REACH — Frontier labs (worth monitoring, more competitive)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     {
         "name": "Anthropic",
-        "api_url": "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs",
+        "platform": "greenhouse",
+        "slug": "anthropic",
     },
     {
-        "name": "DeepMind",
-        "api_url": "https://boards-api.greenhouse.io/v1/boards/deepmind/jobs",
-    },
-    # ─── AI-Native Startups ────────────────────────────────────────
-    {
-        "name": "Scale AI",
-        "api_url": "https://boards-api.greenhouse.io/v1/boards/scaleai/jobs",
+        "name": "Perplexity",
+        "platform": "ashby",
+        "slug": "Perplexity",
     },
     {
-        "name": "Together AI",
-        "api_url": "https://boards-api.greenhouse.io/v1/boards/togetherai/jobs",
-    },
-    {
+        # Data + AI platform
         "name": "Databricks",
-        "api_url": "https://boards-api.greenhouse.io/v1/boards/databricks/jobs",
-    },
-    {
-        "name": "Figma",
-        "api_url": "https://boards-api.greenhouse.io/v1/boards/figma/jobs",
-    },
-    {
-        "name": "Vercel",
-        "api_url": "https://boards-api.greenhouse.io/v1/boards/vercel/jobs",
+        "platform": "greenhouse",
+        "slug": "databricks",
     },
 ]
 
@@ -87,19 +164,72 @@ MAX_JOB_AGE_DAYS = 14
 SEEN_JOBS_FILE = Path(__file__).resolve().parent / "seen_jobs.json"
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Platform-specific fetchers ─────────────────────────────────────────────────
 
-def fetch_jobs(api_url: str) -> list[dict]:
-    """Fetch all jobs from a Greenhouse Job Board API endpoint."""
-    req = Request(api_url, headers={"User-Agent": "JobScraper/1.0"})
+def _http_get_json(url: str) -> dict | list | None:
+    """Helper: GET a URL, return parsed JSON or None on error."""
+    req = Request(url, headers={"User-Agent": "JobScraper/1.0"})
     try:
         with urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-            return data.get("jobs", [])
+            return json.loads(resp.read().decode())
     except (URLError, HTTPError) as exc:
-        print(f"  ⚠  Error fetching {api_url}: {exc}")
+        print(f"  ⚠  Error fetching {url}: {exc}")
+        return None
+
+
+def fetch_greenhouse(slug: str) -> list[dict]:
+    """Fetch jobs from Greenhouse and normalize to common format."""
+    url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
+    data = _http_get_json(url)
+    if not data:
         return []
 
+    normalized = []
+    for job in data.get("jobs", []):
+        normalized.append({
+            "id": str(job["id"]),
+            "title": job.get("title", "").strip(),
+            "location": job.get("location", {}).get("name", ""),
+            "url": job.get("absolute_url", ""),
+            "published": job.get("first_published", ""),
+        })
+    return normalized
+
+
+def fetch_ashby(slug: str) -> list[dict]:
+    """Fetch jobs from Ashby and normalize to common format."""
+    url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}"
+    data = _http_get_json(url)
+    if not data:
+        return []
+
+    normalized = []
+    for job in data.get("jobs", []):
+        # Build location string from primary + secondary locations
+        locations = []
+        if job.get("location"):
+            locations.append(job["location"])
+        for sec in job.get("secondaryLocations", []):
+            if isinstance(sec, str):
+                locations.append(sec)
+
+        normalized.append({
+            "id": str(job["id"]),
+            "title": job.get("title", "").strip(),
+            "location": " | ".join(locations) if locations else "",
+            "url": job.get("jobUrl", ""),
+            "published": job.get("publishedAt", ""),
+        })
+    return normalized
+
+
+FETCHERS = {
+    "greenhouse": fetch_greenhouse,
+    "ashby": fetch_ashby,
+}
+
+
+# ── Filtering ──────────────────────────────────────────────────────────────────
 
 def matches_title(title: str) -> bool:
     """Return True if the job title contains any target keyword."""
@@ -115,16 +245,17 @@ def matches_location(location_name: str) -> bool:
 
 def is_recent(published_str: str) -> bool:
     """Return True if the job was published within MAX_JOB_AGE_DAYS."""
-    if not published_str or published_str == "N/A":
+    if not published_str:
         return True  # If no date, include it to be safe
     try:
-        # Greenhouse dates look like: "2026-04-15T16:57:11-04:00"
         pub_date = datetime.fromisoformat(published_str)
         cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_JOB_AGE_DAYS)
         return pub_date >= cutoff
     except (ValueError, TypeError):
         return True  # Include if we can't parse
 
+
+# ── State persistence ──────────────────────────────────────────────────────────
 
 def load_seen_jobs() -> dict:
     """Load previously seen job IDs from disk."""
@@ -139,6 +270,8 @@ def save_seen_jobs(seen: dict) -> None:
     with open(SEEN_JOBS_FILE, "w") as f:
         json.dump(seen, f, indent=2)
 
+
+# ── Email ──────────────────────────────────────────────────────────────────────
 
 def build_email_body(new_jobs: list[dict]) -> str:
     """Compose a nicely-formatted email body for new job alerts."""
@@ -194,6 +327,7 @@ def main() -> None:
     print(f"  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     print(f"  Location filter: San Francisco")
     print(f"  Max job age: {MAX_JOB_AGE_DAYS} days")
+    print(f"  Companies: {len(COMPANIES)}")
     print("=" * 60)
 
     seen = load_seen_jobs()
@@ -201,42 +335,33 @@ def main() -> None:
 
     for company in COMPANIES:
         name = company["name"]
-        print(f"\n🔍  Scanning {name}...")
-        jobs = fetch_jobs(company["api_url"])
-        print(f"  → Found {len(jobs)} total listings")
+        platform = company["platform"]
+        slug = company["slug"]
+        fetcher = FETCHERS[platform]
+
+        print(f"\n🔍  Scanning {name} ({platform})...")
+        jobs = fetcher(slug)
+        print(f"  → {len(jobs)} total listings")
 
         # Filter pipeline: title → location → recency
-        title_matches = [j for j in jobs if matches_title(j.get("title", ""))]
+        title_matches = [j for j in jobs if matches_title(j["title"])]
         print(f"  → {len(title_matches)} match target title keywords")
 
-        loc_matches = [
-            j for j in title_matches
-            if matches_location(j.get("location", {}).get("name", ""))
-        ]
+        loc_matches = [j for j in title_matches if matches_location(j["location"])]
         print(f"  → {len(loc_matches)} in San Francisco")
 
-        recent_matches = [
-            j for j in loc_matches
-            if is_recent(j.get("first_published", ""))
-        ]
+        recent_matches = [j for j in loc_matches if is_recent(j["published"])]
         print(f"  → {len(recent_matches)} posted within last {MAX_JOB_AGE_DAYS} days")
 
         company_seen = seen.get(name, [])
 
         for job in recent_matches:
-            job_id = str(job["id"])
+            job_id = job["id"]
             if job_id not in company_seen:
-                new_job = {
-                    "company": name,
-                    "title": job["title"].strip(),
-                    "location": job.get("location", {}).get("name", "N/A"),
-                    "url": job.get("absolute_url", ""),
-                    "published": job.get("first_published", "N/A"),
-                    "id": job_id,
-                }
-                all_new_jobs.append(new_job)
+                job["company"] = name
+                all_new_jobs.append(job)
                 company_seen.append(job_id)
-                print(f"  🆕  NEW: {new_job['title']} ({new_job['location']})")
+                print(f"  🆕  NEW: {job['title']} ({job['location']})")
 
         seen[name] = company_seen
 
