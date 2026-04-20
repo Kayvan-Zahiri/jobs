@@ -19,9 +19,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Checkout repo ─────────────────────────────────────────
+      # ── 1. Checkout repo (latest main) ───────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Pull latest changes
+        run: git pull origin main
 
       # ── 2. Set up Python ─────────────────────────────────────────
       - name: Set up Python
@@ -42,7 +48,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
           git add scraper/seen_jobs.json
           git diff --cached --quiet || git commit -m "chore: update seen_jobs.json [skip ci]"
-          git pull --rebase origin main
           git push
