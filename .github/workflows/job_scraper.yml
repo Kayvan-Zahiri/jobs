@@ -11,31 +11,29 @@ on:
   # Allow manual triggering from the Actions tab
   workflow_dispatch:
 
-permissions:
-  contents: write          # needed to commit updated seen_jobs.json
-
 jobs:
   scrape-and-notify:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Checkout repo (latest main) ───────────────────────────
+      # ── 1. Checkout repo ─────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # ── 2. Restore cached seen_jobs.json ─────────────────────────
+      - name: Restore seen jobs cache
+        uses: actions/cache/restore@v4
         with:
-          ref: main
-          fetch-depth: 0
+          path: scraper/seen_jobs.json
+          key: seen-jobs-store
 
-      - name: Pull latest changes
-        run: git pull origin main
-
-      # ── 2. Set up Python ─────────────────────────────────────────
+      # ── 3. Set up Python ─────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # ── 3. Run the scraper ───────────────────────────────────────
+      # ── 4. Run the scraper ───────────────────────────────────────
       - name: Run job scraper
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
@@ -43,12 +41,15 @@ jobs:
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
         run: python scraper/job_scraper.py
 
-      # ── 4. Commit updated seen-jobs list ─────────────────────────
-      - name: Commit seen_jobs.json
+      # ── 5. Save seen_jobs.json to cache ──────────────────────────
+      - name: Delete old cache
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
-          git add scraper/seen_jobs.json
-          git diff --cached --quiet || git commit -m "chore: update seen_jobs.json [skip ci]"
-          git push
+          gh cache delete seen-jobs-store || true
+
+      - name: Save seen jobs cache
+        uses: actions/cache/save@v4
+        with:
+          path: scraper/seen_jobs.json
+          key: seen-jobs-store
