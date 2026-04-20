@@ -295,12 +295,15 @@ def build_email_body(new_jobs: list[dict]) -> str:
 
 def send_email(subject: str, body: str) -> None:
     """Send an email via Gmail SMTP using environment credentials."""
-    sender = os.environ.get("GMAIL_USER")
-    password = os.environ.get("GMAIL_APP_PASSWORD")
-    recipient = os.environ.get("NOTIFY_EMAIL", sender)
+    sender = (os.environ.get("GMAIL_USER") or "").strip()
+    password = (os.environ.get("GMAIL_APP_PASSWORD") or "").strip()
+    recipient = (os.environ.get("NOTIFY_EMAIL") or sender).strip()
 
     if not sender or not password:
         print("  ⚠  GMAIL_USER or GMAIL_APP_PASSWORD not set — skipping email.")
+        return
+    if not recipient:
+        print("  ⚠  NOTIFY_EMAIL resolved empty — skipping email.")
         return
 
     msg = EmailMessage()
@@ -365,10 +368,8 @@ def main() -> None:
 
         seen[name] = company_seen
 
-    # Persist updated seen-list
-    save_seen_jobs(seen)
-
-    # Send notification if we found new jobs
+    # Send notification if we found new jobs (before persisting, so a failed
+    # send doesn't silently mark jobs as seen).
     if all_new_jobs:
         print(f"\n📬  {len(all_new_jobs)} new job(s) found — sending email...")
         subject = f"🔔 {len(all_new_jobs)} New Job Alert(s) — Job Scraper"
@@ -376,6 +377,9 @@ def main() -> None:
         send_email(subject, body)
     else:
         print("\n✅  No new matching jobs found this run.")
+
+    # Persist updated seen-list only after a successful email (or no-op).
+    save_seen_jobs(seen)
 
     print("\nDone.\n")
 
