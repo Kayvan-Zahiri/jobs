@@ -2,7 +2,9 @@
   "LiveKit": [],
   "ElevenLabs": [],
   "Vapi": [],
-  "LangChain": [],
+  "LangChain": [
+    "068b2e23-af01-42c7-9bce-d86976ea4d6e"
+  ],
   "Dagster Labs": [
     "7714923003"
   ],
